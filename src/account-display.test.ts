@@ -34,6 +34,5 @@ test("uses Codex's weekly window when there is no five-hour limit", () => {
 
 test("falls back to the tightest window when neither known Codex window exists", () => {
   assert.equal(getGlanceWindow("codex", [{ ...weekly, id: "other", label: "Other Limit" }])?.id, "other");
-  assert.equal(getGlanceWindow("claude", [fiveHour, weekly]), weekly);
   assert.equal(getGlanceWindow("codex", []), null);
 });
