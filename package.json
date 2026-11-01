@@ -22,6 +22,15 @@
   ],
   "preferences": [
     {
+      "name": "showCodex",
+      "title": "ChatGPT",
+      "label": "Show ChatGPT limits",
+      "description": "Read ChatGPT usage for every account signed in with codex-auth",
+      "type": "checkbox",
+      "required": false,
+      "default": true
+    },
+    {
       "name": "showClaudeCode",
       "title": "Claude Code",
       "label": "Show Claude Code limits",

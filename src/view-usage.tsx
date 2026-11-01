@@ -29,7 +29,7 @@ export default function Command() {
         <List.EmptyView
           icon={Icon.Gauge}
           title="No Accounts Configured"
-          description="Add an account with codex-auth, or turn on Claude Code in this extension's preferences."
+          description="Add an account with codex-auth, or turn on ChatGPT or Claude Code in this extension's preferences."
           actions={
             <ActionPanel>
               <Action title="Open Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />

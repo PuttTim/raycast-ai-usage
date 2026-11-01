@@ -4,6 +4,7 @@ import { fetchCodexAccount, getCodexAccounts } from "./providers/codex";
 import type { Account, ProviderId } from "./providers/types";
 
 type Preferences = {
+  showCodex: boolean;
   showClaudeCode: boolean;
 };
 
@@ -36,9 +37,9 @@ export type ConfiguredAccount = {
 };
 
 export function getConfiguredAccounts(): ConfiguredAccount[] {
-  const { showClaudeCode } = getPreferenceValues<Preferences>();
+  const { showCodex, showClaudeCode } = getPreferenceValues<Preferences>();
 
-  const accounts: ConfiguredAccount[] = getCodexAccounts().map((account) => ({
+  const accounts: ConfiguredAccount[] = (showCodex ? getCodexAccounts() : []).map((account) => ({
     id: account.id,
     provider: "codex",
     label: account.email ?? account.label,
