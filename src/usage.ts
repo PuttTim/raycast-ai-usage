@@ -30,8 +30,6 @@ export type ConfiguredAccount = {
   id: string;
   provider: ProviderId;
   label: string;
-  /** Whether this is the Codex credential currently active on disk. */
-  isCurrent?: boolean;
   /** Age at which this account's cached response is worth replacing. */
   refreshIntervalMs: number;
   fetch: () => Promise<Account>;
@@ -44,7 +42,6 @@ export function getConfiguredAccounts(): ConfiguredAccount[] {
     id: account.id,
     provider: "codex",
     label: account.email ?? account.label,
-    isCurrent: account.isCurrent,
     refreshIntervalMs: REFRESH_INTERVAL_MS.codex,
     fetch: account.failure ? async () => account : () => fetchCodexAccount(account.id),
   }));

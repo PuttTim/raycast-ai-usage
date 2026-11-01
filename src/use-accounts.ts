@@ -2,8 +2,7 @@ import { Cache } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccountNames } from "./account-names";
 import { getConfiguredAccounts, type ConfiguredAccount } from "./usage";
-import type { Account, AccountFailure, ProviderId } from "./providers/types";
-import { prioritizeAccount } from "./account-refresh";
+import type { Account, AccountFailure } from "./providers/types";
 
 const cache = new Cache();
 const CACHE_KEY = "accounts";
@@ -49,16 +48,12 @@ export function useAccounts() {
   const [initial] = useState(() => {
     const entries = readCache(configs);
 
-    return {
-      entries,
-      selectedId: getMostRecentlyUsed(entries) ?? configs[0]?.id,
-      currentCodexId: configs.find((config) => config.provider === "codex" && config.isCurrent)?.id,
-    };
+    return { entries, selectedId: getMostRecentlyUsed(entries) ?? configs[0]?.id };
   });
   const [entries, setEntries] = useState<Map<string, CacheEntry>>(initial.entries);
   const [refreshErrors, setRefreshErrors] = useState<Map<string, AccountFailure>>(new Map());
   const [pending, setPending] = useState<Set<string>>(() => new Set(configs.map((config) => config.id)));
-  const [refreshRequest, setRefreshRequest] = useState({ generation: 0, priorityId: initial.currentCodexId });
+  const [refreshRequest, setRefreshRequest] = useState(0);
   const latestRun = useRef(0);
 
   useEffect(() => {
@@ -66,64 +61,58 @@ export function useAccounts() {
     // Only the first pass honours the cache; every later pass is a deliberate
     // refresh, and `initial.entries` is what the cache held when we mounted.
     const due =
-      refreshRequest.generation === 0
-        ? configs.filter((config) => !isFresh(initial.entries.get(config.id), config))
-        : configs;
+      refreshRequest === 0 ? configs.filter((config) => !isFresh(initial.entries.get(config.id), config)) : configs;
 
     setPending(new Set(due.map((config) => config.id)));
 
-    // Providers run side by side, but accounts within one provider go in turn:
-    // ChatGPT's backend answers `{"error":"Too many concurrent requests"}` when
-    // several arrive together, and each Codex check also costs a CLI spawn.
-    for (const [provider, group] of groupByProvider(due)) {
-      const ordered = provider === "codex" ? prioritizeAccount(group, refreshRequest.priorityId) : group;
-
+    // Every account is fetched at once. ChatGPT rows share a single `codex-auth
+    // list` call (see `listCodexAccounts`), so this never sends ChatGPT the
+    // concurrent requests it rejects with "Too many concurrent requests".
+    for (const config of due) {
       void (async () => {
-        for (const config of ordered) {
-          const account = await config.fetch().catch((error: unknown) => failedAccount(config, error));
+        const account = await config.fetch().catch((error: unknown) => failedAccount(config, error));
 
-          if (latestRun.current !== run) {
-            return;
+        if (latestRun.current !== run) {
+          return;
+        }
+
+        const seenAt = Date.now();
+
+        setEntries((previous) => {
+          const before = previous.get(config.id);
+          const next = new Map(previous);
+
+          // A failed refresh must not throw away numbers we already have -
+          // being rate limited for an hour should not blank the pane. We
+          // still record the attempt, so we do not retry in a tight loop.
+          if (account.failure && before && !before.account.failure) {
+            return next.set(config.id, { ...before, attemptedAt: seenAt });
           }
 
-          const seenAt = Date.now();
+          // Same usage as last time keeps the original timestamp, so
+          // `changedAt` marks real movement rather than the last poll.
+          const changedAt = before && signature(before.account) === signature(account) ? before.changedAt : seenAt;
 
-          setEntries((previous) => {
-            const before = previous.get(config.id);
-            const next = new Map(previous);
+          return next.set(config.id, { account, fetchedAt: seenAt, attemptedAt: seenAt, changedAt });
+        });
 
-            // A failed refresh must not throw away numbers we already have -
-            // being rate limited for an hour should not blank the pane. We
-            // still record the attempt, so we do not retry in a tight loop.
-            if (account.failure && before && !before.account.failure) {
-              return next.set(config.id, { ...before, attemptedAt: seenAt });
-            }
+        setRefreshErrors((previous) => {
+          const next = new Map(previous);
 
-            // Same usage as last time keeps the original timestamp, so
-            // `changedAt` marks real movement rather than the last poll.
-            const changedAt = before && signature(before.account) === signature(account) ? before.changedAt : seenAt;
-
-            return next.set(config.id, { account, fetchedAt: seenAt, attemptedAt: seenAt, changedAt });
-          });
-
-          setRefreshErrors((previous) => {
-            const next = new Map(previous);
-
-            if (account.failure) {
-              next.set(config.id, account.failure);
-            } else {
-              next.delete(config.id);
-            }
-
-            return next;
-          });
-
-          setPending((previous) => {
-            const next = new Set(previous);
+          if (account.failure) {
+            next.set(config.id, account.failure);
+          } else {
             next.delete(config.id);
-            return next;
-          });
-        }
+          }
+
+          return next;
+        });
+
+        setPending((previous) => {
+          const next = new Set(previous);
+          next.delete(config.id);
+          return next;
+        });
       })();
     }
   }, [configs, refreshRequest, initial.entries]);
@@ -156,31 +145,11 @@ export function useAccounts() {
     isLoading: pending.size > 0,
     /** The account used most recently as of the last launch; stable for this session. */
     initialSelectedId: initial.selectedId,
-    /** Refetches everything, asking the active Codex account first. */
-    refresh: useCallback(
-      (priorityId?: string) => setRefreshRequest((request) => ({ generation: request.generation + 1, priorityId })),
-      [],
-    ),
+    /** Refetches everything, ignoring the cache. */
+    refresh: useCallback(() => setRefreshRequest((generation) => generation + 1), []),
     /** Stores a display name for an account; an empty name restores the configured one. */
     rename,
   };
-}
-
-/** Groups the accounts due for a fetch by provider, preserving configured order. */
-function groupByProvider(configs: ConfiguredAccount[]): Map<ProviderId, ConfiguredAccount[]> {
-  const groups = new Map<ProviderId, ConfiguredAccount[]>();
-
-  for (const config of configs) {
-    const group = groups.get(config.provider);
-
-    if (group) {
-      group.push(config);
-    } else {
-      groups.set(config.provider, [config]);
-    }
-  }
-
-  return groups;
 }
 
 function isFresh(entry: CacheEntry | undefined, config: ConfiguredAccount): boolean {

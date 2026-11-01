@@ -5,10 +5,9 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   applyCodexAuthRegistry,
-  parseCodexAuthError,
   parseCodexAuthJson,
-  parseCodexAuthSwitchJson,
   parseCodexAuthTable,
+  parseCodexRegistry,
 } from "./codex-auth-table";
 import { fetchCodexResetCredits } from "./codex-reset-credits";
 import { isRecord } from "./types";
@@ -49,69 +48,11 @@ export async function fetchCodexAccount(id: string): Promise<Account> {
   }
 }
 
-export async function switchCodexAccount(query: string, expectedId: string): Promise<void> {
-  const wasRunning = await isChatGptRunning();
-  const expectedKey = expectedId.startsWith("codex-auth:") ? expectedId.slice("codex-auth:".length) : null;
-  let switchedKey: string | null;
-
-  try {
-    const stdout = await runCodexAuth(["switch", query, "--json"], 30_000);
-    switchedKey = parseCodexAuthSwitchJson(stdout);
-
-    if (switchedKey === null) {
-      throw new Error("codex-auth returned an invalid switch response.");
-    }
-  } catch (error) {
-    throw new Error(commandErrorMessage(error));
-  }
-
-  if (expectedKey && switchedKey !== expectedKey) {
-    throw new Error("codex-auth did not activate the selected account.");
-  }
-
-  cached = null;
-
-  if (wasRunning) {
-    await execFileAsync("/usr/bin/pkill", ["-KILL", "-f", "^/Applications/ChatGPT\\.app/Contents/"]).catch(
-      () => undefined,
-    );
-
-    for (let attempt = 0; attempt < 100 && (await isChatGptRunning()); attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-
-    if (await isChatGptRunning()) {
-      throw new Error("Account switched, but Codex did not finish quitting. Reopen it manually.");
-    }
-
-    try {
-      // -g relaunches Codex without pulling focus, which would otherwise
-      // dismiss the Raycast window mid-switch.
-      await execFileAsync("/usr/bin/open", ["-g", "-b", "com.openai.codex"]);
-    } catch {
-      throw new Error("Account switched, but Codex could not reopen. Reopen it manually.");
-    }
-  }
-}
-
-function commandErrorMessage(error: unknown): string {
-  if (!isRecord(error)) {
-    return error instanceof Error ? error.message : String(error);
-  }
-
-  const stderr = typeof error.stderr === "string" ? error.stderr.trim() : "";
-  const stdout = typeof error.stdout === "string" ? error.stdout.trim() : "";
-  const message = error instanceof Error ? error.message : "codex-auth could not switch accounts.";
-  const structured = parseCodexAuthError(stdout);
-
-  return structured?.message || stderr || stdout || message;
-}
-
 function emptyAccount(id: string): Account {
   return {
     id,
     provider: "codex",
-    label: "Codex",
+    label: "ChatGPT",
     plan: null,
     email: null,
     windows: [],
@@ -136,6 +77,14 @@ function parseAccounts(output: string): Account[] {
 }
 
 function listCodexAccountsSync(): Account[] {
+  // Reading the registry directly skips a CLI spawn (and a Node start-up behind
+  // the npm/pnpm shim) on the render path, before the list can draw at all.
+  const fromRegistry = parseCodexRegistry(readRegistry());
+
+  if (fromRegistry !== null && fromRegistry.length > 0) {
+    return fromRegistry;
+  }
+
   try {
     const accounts = parseCodexAuthJson(runCodexAuthSync(["list", "--skip-api", "--json"], 5_000));
 
@@ -171,42 +120,31 @@ function readRegistry(): unknown {
   }
 }
 
-async function addResetCredits(accounts: Account[]): Promise<Account[]> {
-  const result: Account[] = [];
-
-  for (const account of accounts) {
-    const accountKey = account.id.startsWith("codex-auth:") ? account.id.slice("codex-auth:".length) : null;
-
-    if (!accountKey || accountKey === "unavailable") {
-      result.push(account);
-      continue;
-    }
-
-    try {
-      const filename = `${Buffer.from(accountKey).toString("base64url")}.auth.json`;
-      const auth: unknown = JSON.parse(readFileSync(join(homedir(), ".codex/accounts", filename), "utf8"));
-      const tokens = isRecord(auth) && isRecord(auth.tokens) ? auth.tokens : {};
-      const accessToken = typeof tokens.access_token === "string" ? tokens.access_token : null;
-      const accountId = typeof tokens.account_id === "string" ? tokens.account_id : null;
-
-      result.push({
-        ...account,
-        resets: accessToken ? await fetchCodexResetCredits(accessToken, accountId).catch(() => null) : null,
-      });
-    } catch {
-      result.push(account);
-    }
-  }
-
-  return result;
+/** Each account has its own token, so their reset lookups run side by side. */
+function addResetCredits(accounts: Account[]): Promise<Account[]> {
+  return Promise.all(accounts.map(addAccountResetCredits));
 }
 
-async function isChatGptRunning(): Promise<boolean> {
+async function addAccountResetCredits(account: Account): Promise<Account> {
+  const accountKey = account.id.startsWith("codex-auth:") ? account.id.slice("codex-auth:".length) : null;
+
+  if (!accountKey || accountKey === "unavailable") {
+    return account;
+  }
+
   try {
-    await execFileAsync("/usr/bin/pgrep", ["-f", "^/Applications/ChatGPT\\.app/Contents/"]);
-    return true;
+    const filename = `${Buffer.from(accountKey).toString("base64url")}.auth.json`;
+    const auth: unknown = JSON.parse(readFileSync(join(homedir(), ".codex/accounts", filename), "utf8"));
+    const tokens = isRecord(auth) && isRecord(auth.tokens) ? auth.tokens : {};
+    const accessToken = typeof tokens.access_token === "string" ? tokens.access_token : null;
+    const accountId = typeof tokens.account_id === "string" ? tokens.account_id : null;
+
+    return {
+      ...account,
+      resets: accessToken ? await fetchCodexResetCredits(accessToken, accountId).catch(() => null) : null,
+    };
   } catch {
-    return false;
+    return account;
   }
 }
 

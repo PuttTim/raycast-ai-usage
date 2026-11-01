@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  applyCodexAuthRegistry,
-  parseCodexAuthError,
-  parseCodexAuthJson,
-  parseCodexAuthSwitchJson,
-  parseCodexAuthTable,
-} from "./providers/codex-auth-table.ts";
+import { applyCodexAuthRegistry, parseCodexAuthJson, parseCodexAuthTable } from "./providers/codex-auth-table.ts";
 
 test("parses codex-auth v0.3 JSON without depending on its table columns", () => {
   const accounts = parseCodexAuthJson(
@@ -42,13 +36,11 @@ test("parses codex-auth v0.3 JSON without depending on its table columns", () =>
   );
 
   assert.deepEqual(
-    accounts?.map(({ id, email, plan, windows, isCurrent, switchQuery }) => ({
+    accounts?.map(({ id, email, plan, windows }) => ({
       id,
       email,
       plan,
       windows: windows.map(({ label, usedPercent }) => ({ label, usedPercent })),
-      isCurrent,
-      switchQuery,
     })),
     [
       {
@@ -56,8 +48,6 @@ test("parses codex-auth v0.3 JSON without depending on its table columns", () =>
         email: "student@example.edu",
         plan: "plus",
         windows: [{ label: "5h Limit", usedPercent: 12.5 }],
-        isCurrent: false,
-        switchQuery: "account-1",
       },
       {
         id: "codex-auth:account-2",
@@ -67,8 +57,6 @@ test("parses codex-auth v0.3 JSON without depending on its table columns", () =>
           { label: "5h Limit", usedPercent: 20 },
           { label: "Weekly Limit", usedPercent: 40 },
         ],
-        isCurrent: true,
-        switchQuery: "account-2",
       },
     ],
   );
@@ -76,42 +64,6 @@ test("parses codex-auth v0.3 JSON without depending on its table columns", () =>
 
 test("does not mistake legacy table output for JSON", () => {
   assert.equal(parseCodexAuthJson("ACCOUNT PLAN 5H USAGE WEEKLY USAGE"), null);
-});
-
-test("parses the account key from a codex-auth v0.3 switch response", () => {
-  assert.equal(
-    parseCodexAuthSwitchJson(
-      JSON.stringify({
-        schema_version: 1,
-        command: "switch",
-        switched_to: { account_key: "account-2", email: "personal@example.com" },
-      }),
-    ),
-    "account-2",
-  );
-});
-
-test("rejects malformed and wrong-command switch responses", () => {
-  assert.equal(parseCodexAuthSwitchJson("not json"), null);
-  assert.equal(
-    parseCodexAuthSwitchJson(
-      JSON.stringify({ schema_version: 1, command: "list", switched_to: { account_key: "account-2" } }),
-    ),
-    null,
-  );
-});
-
-test("parses structured codex-auth v0.3 errors", () => {
-  assert.deepEqual(
-    parseCodexAuthError(
-      JSON.stringify({
-        schema_version: 1,
-        error: { code: "ambiguous_query", message: "more than one account matches" },
-      }),
-    ),
-    { code: "ambiguous_query", message: "more than one account matches" },
-  );
-  assert.equal(parseCodexAuthError('{"schema_version":1,"error":{"code":"future_error"}}'), null);
 });
 
 test("parses every codex-auth account and converts remaining to used percent", () => {
@@ -124,27 +76,21 @@ test("parses every codex-auth account and converts remaining to used percent", (
   const accounts = parseCodexAuthTable(output);
 
   assert.deepEqual(
-    accounts.map(({ email, plan, windows, isCurrent, switchQuery }) => ({
+    accounts.map(({ email, plan, windows }) => ({
       email,
       plan,
       used: windows.map((window) => window.usedPercent),
-      isCurrent,
-      switchQuery,
     })),
     [
       {
         email: "student@example.edu",
         plan: "Unknown",
         used: [0, 0],
-        isCurrent: false,
-        switchQuery: "01",
       },
       {
         email: "personal@example.com",
         plan: "Plus",
         used: [1, 1],
-        isCurrent: true,
-        switchQuery: "02",
       },
     ],
   );
@@ -166,13 +112,6 @@ test("keeps same-email profiles distinct", () => {
   });
 
   assert.equal(new Set(accounts.map(({ id }) => id)).size, 2);
-  assert.deepEqual(
-    accounts.map(({ switchQuery, isCurrent }) => ({ switchQuery, isCurrent })),
-    [
-      { switchQuery: "01", isCurrent: false },
-      { switchQuery: "02", isCurrent: true },
-    ],
-  );
 });
 
 test("uses registry duration when a weekly-only account is repeated in both table columns", () => {
@@ -205,5 +144,4 @@ test("uses registry duration when a weekly-only account is repeated in both tabl
       resetsAt: 1785814639000,
     },
   ]);
-  assert.equal(account.switchQuery, "weekly@example.com");
 });

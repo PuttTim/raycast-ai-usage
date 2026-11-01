@@ -1,22 +1,11 @@
-import {
-  Action,
-  ActionPanel,
-  Color,
-  Form,
-  Icon,
-  List,
-  Toast,
-  openExtensionPreferences,
-  showToast,
-  useNavigation,
-} from "@raycast/api";
+import { Action, ActionPanel, Color, Form, Icon, List, openExtensionPreferences, useNavigation } from "@raycast/api";
 import { Fragment, useState, type ReactElement } from "react";
 import { getProgressIcon } from "@raycast/utils";
 import { useAccounts, type AccountState } from "./use-accounts";
 import { getGlanceWindow } from "./account-display";
 import { formatResetTimeRemaining, parseResetExpiry } from "./reset-expiry";
 import { getBranding } from "./providers/branding";
-import { switchCodexAccount } from "./providers/codex";
+import { getPace, type Pace } from "./pace";
 import type { Account, AccountFailure, ResetCredit, ResetCreditsResponse, UsageWindow } from "./providers/types";
 
 export default function Command() {
@@ -24,18 +13,8 @@ export default function Command() {
   // Controlled from the first render onwards, so nothing re-selects a row as
   // the accounts stream in one by one.
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSelectedId);
-  const currentCodexId = states.find(
-    (state) =>
-      state.config.provider === "codex" && (state.account === null ? state.config.isCurrent : state.account.isCurrent),
-  )?.config.id;
-
   const refreshAction = (
-    <Action
-      title="Refresh"
-      icon={Icon.ArrowClockwise}
-      onAction={() => refresh(currentCodexId)}
-      shortcut={{ modifiers: ["cmd"], key: "r" }}
-    />
+    <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={refresh} shortcut={{ modifiers: ["cmd"], key: "r" }} />
   );
 
   return (
@@ -59,13 +38,7 @@ export default function Command() {
         />
       ) : null}
       {states.map((state) => (
-        <AccountItem
-          key={state.config.id}
-          state={state}
-          refreshAction={refreshAction}
-          onRefresh={() => refresh(state.config.id)}
-          onRename={rename}
-        />
+        <AccountItem key={state.config.id} state={state} refreshAction={refreshAction} onRename={rename} />
       ))}
     </List>
   );
@@ -74,53 +47,26 @@ export default function Command() {
 function AccountItem({
   state,
   refreshAction,
-  onRefresh,
   onRename,
 }: {
   state: AccountState;
   refreshAction: ReactElement;
-  onRefresh: () => void;
   onRename: RenameHandler;
 }) {
   const { config, account, isStale } = state;
   const branding = getBranding(config.provider);
   const resets = account?.resets ? getAvailableResets(account.resets) : [];
-  // Hoisted so the guard below still narrows it inside the async handler.
-  const switchQuery = account?.switchQuery;
 
   return (
     <List.Item
       id={config.id}
-      icon={{ source: branding.icon, tintColor: getBrandTint(account) }}
+      icon={{ source: branding.icon, tintColor: getBrandTint(account) ?? branding.iconTint }}
       title={config.label}
       keywords={[branding.name, account?.email ?? "", formatPlan(account?.plan ?? null) ?? ""]}
       accessories={getAccessories(account, isStale, state.refreshError)}
       detail={<AccountDetail state={state} resets={resets} resetCount={account?.resets?.available_count ?? null} />}
       actions={
         <ActionPanel>
-          {config.provider === "codex" && account?.email && switchQuery && !account.isCurrent ? (
-            <Action
-              title="Switch to This Account"
-              icon={Icon.Switch}
-              onAction={async () => {
-                const toast = await showToast({
-                  style: Toast.Style.Animated,
-                  title: `Switching to ${account.email}`,
-                });
-
-                try {
-                  await switchCodexAccount(switchQuery, account.id);
-                  onRefresh();
-                  toast.style = Toast.Style.Success;
-                  toast.title = `Switched to ${account.email}`;
-                } catch (error) {
-                  toast.style = Toast.Style.Failure;
-                  toast.title = "Could Not Switch Account";
-                  toast.message = error instanceof Error ? error.message : String(error);
-                }
-              }}
-            />
-          ) : null}
           {account?.id === "codex-auth:unavailable" ? (
             <Action.CopyToClipboard
               title="Copy Codex-Auth Install Command"
@@ -217,14 +163,8 @@ function getAccessories(
     const remaining = getRemaining(glanceWindow);
     accessories.push({
       icon: getProgressIcon(remaining / 100, getRemainingColor(remaining)),
+      text: `${formatPercent(remaining)}%`,
       tooltip: `${glanceWindow.label}: ${formatPercent(remaining)}% left`,
-    });
-  }
-
-  if (account.isCurrent) {
-    accessories.unshift({
-      icon: { source: Icon.CheckCircle, tintColor: Color.Blue },
-      tooltip: "Active Codex account",
     });
   }
 
@@ -289,9 +229,11 @@ function AccountDetail({
 function buildWindowSections({ config, account }: AccountState): ReactElement[][] {
   if (account === null) {
     return getBranding(config.provider).skeletonWindows.map((label) => [
-      <List.Item.Detail.Metadata.TagList key={label} title={label}>
-        <List.Item.Detail.Metadata.TagList.Item text="Checking…" color={Color.SecondaryText} />
-      </List.Item.Detail.Metadata.TagList>,
+      <List.Item.Detail.Metadata.Label
+        key={label}
+        title={label}
+        text={{ value: "Checking…", color: Color.SecondaryText }}
+      />,
     ]);
   }
 
@@ -308,57 +250,69 @@ function buildWindowSections({ config, account }: AccountState): ReactElement[][
     ];
   }
 
+  // Two lines per window: what is left and its pace as pills, then a plain
+  // line for when it comes back.
   return account.windows.map((window) => {
     const remaining = getRemaining(window);
     const resetsAt = window.resetsAt;
-
-    return [
+    const pace = getPace(window);
+    const rows = [
       <List.Item.Detail.Metadata.TagList key={window.id} title={window.label}>
         <List.Item.Detail.Metadata.TagList.Item
           text={`${formatPercent(remaining)}% left`}
           icon={getProgressIcon(remaining / 100, getRemainingColor(remaining))}
           color={getRemainingColor(remaining)}
         />
-        {resetsAt ? (
+        {pace ? (
           <List.Item.Detail.Metadata.TagList.Item
-            text={`in ${formatTimeUntil(resetsAt)}`}
-            color={Color.SecondaryText}
-            onAction={() => {
-              void showToast({
-                title: `${window.label} resets`,
-                message: formatFullResetDate(resetsAt),
-              });
-            }}
+            icon={{ source: PACE_ICONS[pace.status], tintColor: PACE_COLORS[pace.status] }}
+            color={PACE_COLORS[pace.status]}
           />
         ) : null}
       </List.Item.Detail.Metadata.TagList>,
     ];
+
+    if (resetsAt) {
+      rows.push(
+        <List.Item.Detail.Metadata.Label
+          key={`${window.id}-resets`}
+          title="Resets"
+          text={`in ${formatTimeUntil(resetsAt)} · ${formatResetDate(resetsAt)}`}
+        />,
+      );
+    }
+
+    return rows;
   });
 }
 
-/** Who this account is: the product, the plan it is on, and the signed-in address. */
+/** Pace reads as a chevron: burning faster than the window, level with it, or slower. */
+const PACE_ICONS: Record<Pace["status"], Icon> = {
+  under: Icon.ChevronDownSmall,
+  on: Icon.Minus,
+  over: Icon.ChevronUpSmall,
+};
+
+/** Under pace is unremarkable, on pace is a quiet confirmation, over pace is a warning. */
+const PACE_COLORS: Record<Pace["status"], Color> = {
+  under: Color.SecondaryText,
+  on: Color.Blue,
+  over: Color.Orange,
+};
+
+/** Who this account is: the product and plan as one line, then the signed-in address. */
 function buildAccountRows({ config, account }: AccountState): ReactElement[] {
   const branding = getBranding(config.provider);
   const plan = formatPlan(account?.plan ?? null);
+  const product = config.provider === "codex" ? "ChatGPT" : "Claude";
   const rows = [
     <List.Item.Detail.Metadata.Label
-      key="provider"
-      title="Provider"
-      text={branding.name}
-      icon={{ source: branding.icon }}
+      key="plan"
+      title="Plan"
+      text={plan ? `${product} ${plan}` : product}
+      icon={{ source: branding.icon, tintColor: branding.iconTint }}
     />,
   ];
-
-  if (plan) {
-    rows.push(
-      <List.Item.Detail.Metadata.Label
-        key="plan"
-        title="Plan"
-        text={plan}
-        icon={getPlanIcon(config.provider, account?.plan)}
-      />,
-    );
-  }
 
   if (account?.email) {
     rows.push(<List.Item.Detail.Metadata.Label key="email" title="Account" text={account.email} icon={Icon.Person} />);
@@ -420,14 +374,11 @@ function buildResetRows(credits: ResetCredit[], availableCount: number | null): 
 
   return [
     <List.Item.Detail.Metadata.TagList key="available" title="Usage Resets">
-      <List.Item.Detail.Metadata.TagList.Item text={`${availableCount} available`} color={Color.Blue} />
+      <List.Item.Detail.Metadata.TagList.Item text={`${availableCount} available`} color={Color.Purple} />
     </List.Item.Detail.Metadata.TagList>,
     ...credits.map((credit, index) => (
       <List.Item.Detail.Metadata.TagList key={credit.id} title={`Reset ${index + 1}`}>
-        <List.Item.Detail.Metadata.TagList.Item
-          text={formatExpiryDate(credit.expires_at)}
-          color={Color.SecondaryText}
-        />
+        <List.Item.Detail.Metadata.TagList.Item text={formatExpiryDate(credit.expires_at)} color={Color.PrimaryText} />
         <List.Item.Detail.Metadata.TagList.Item
           text={formatTimeRemainingTag(credit.expires_at)}
           color={getResetExpiryColor(credit.expires_at)}
@@ -465,50 +416,6 @@ function formatPlan(plan: string | null): string | null {
   }
 
   return plan.charAt(0).toUpperCase() + plan.slice(1);
-}
-
-/**
- * Provider-neutral tiers, ordered low to high. OpenAI and Anthropic name
- * their tiers differently but line up one-for-one on price and features:
- * ChatGPT Plus ≈ Claude Pro, and ChatGPT Pro ≈ Claude Max. Mapping both
- * through this instead of matching plan strings directly means those
- * equivalent tiers get the same icon.
- */
-type PlanTier = "free" | "plus" | "premium" | "team" | "enterprise" | "edu";
-
-const CODEX_PLAN_TIERS: Record<string, PlanTier> = {
-  free: "free",
-  plus: "plus",
-  pro: "premium",
-  team: "team",
-  business: "enterprise",
-  enterprise: "enterprise",
-  edu: "edu",
-  education: "edu",
-};
-
-const CLAUDE_PLAN_TIERS: Record<string, PlanTier> = {
-  free: "free",
-  pro: "plus",
-  max: "premium",
-  team: "team",
-  enterprise: "enterprise",
-};
-
-const PLAN_TIER_ICONS: Record<PlanTier, Icon> = {
-  free: Icon.Circle,
-  plus: Icon.Star,
-  premium: Icon.Rocket,
-  team: Icon.TwoPeople,
-  enterprise: Icon.Building,
-  edu: Icon.Book,
-};
-
-function getPlanIcon(provider: Account["provider"], plan: string | null | undefined): Icon {
-  const normalized = plan?.toLowerCase().trim() ?? "";
-  const tier = (provider === "claude" ? CLAUDE_PLAN_TIERS : CODEX_PLAN_TIERS)[normalized];
-
-  return tier ? PLAN_TIER_ICONS[tier] : Icon.Star;
 }
 
 function formatTimeRemainingTag(date: string): string {
@@ -552,18 +459,6 @@ function formatResetDate(timestampMs: number): string {
     month: "short",
     hour: "numeric",
     minute: "2-digit",
-  }).format(new Date(timestampMs));
-}
-
-function formatFullResetDate(timestampMs: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
   }).format(new Date(timestampMs));
 }
 

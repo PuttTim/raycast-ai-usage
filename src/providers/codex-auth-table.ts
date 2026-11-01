@@ -1,10 +1,5 @@
 import type { Account, UsageWindow } from "./types";
 
-export type CodexAuthError = {
-  code: string;
-  message: string;
-};
-
 /** Parses codex-auth v0.3's versioned list JSON. Returns null for non-JSON/legacy output. */
 export function parseCodexAuthJson(raw: string): Account[] | null {
   let value: unknown;
@@ -18,8 +13,6 @@ export function parseCodexAuthJson(raw: string): Account[] | null {
   if (!isRecord(value) || value.schema_version !== 1 || value.command !== "list" || !Array.isArray(value.accounts)) {
     return null;
   }
-
-  const activeKey = typeof value.active_account_key === "string" ? value.active_account_key : null;
 
   return value.accounts.flatMap((candidate) => {
     if (!isRecord(candidate) || typeof candidate.account_key !== "string" || typeof candidate.email !== "string") {
@@ -41,35 +34,38 @@ export function parseCodexAuthJson(raw: string): Account[] | null {
         windows,
         resets: null,
         failure: null,
-        isCurrent: candidate.active === true || candidate.account_key === activeKey,
-        switchQuery: candidate.account_key,
       },
     ];
   });
 }
 
-/** Parses codex-auth v0.3's versioned switch response. */
-export function parseCodexAuthSwitchJson(raw: string): string | null {
-  const value = parseJsonRecord(raw);
-
-  if (value?.schema_version !== 1 || value.command !== "switch" || !isRecord(value.switched_to)) {
+/**
+ * Reads codex-auth's own registry (`~/.codex/accounts/registry.json`) into
+ * accounts carrying their last locally recorded usage. This is what
+ * `codex-auth list --skip-api` prints, without spawning a process. Returns null
+ * when the file is not a registry this parser understands.
+ */
+export function parseCodexRegistry(value: unknown): Account[] | null {
+  if (!isRecord(value) || !Array.isArray(value.accounts)) {
     return null;
   }
 
-  return typeof value.switched_to.account_key === "string" ? value.switched_to.account_key : null;
-}
+  return value.accounts.filter(isRegistryAccount).map((registry) => {
+    const usage = isRecord(registry.last_usage) ? registry.last_usage : {};
 
-/** Extracts a stable message from any schema-v1 codex-auth error document. */
-export function parseCodexAuthError(raw: string): CodexAuthError | null {
-  const value = parseJsonRecord(raw);
-
-  if (value?.schema_version !== 1 || !isRecord(value.error)) {
-    return null;
-  }
-
-  return typeof value.error.code === "string" && typeof value.error.message === "string"
-    ? { code: value.error.code, message: value.error.message }
-    : null;
+    return {
+      id: `codex-auth:${registry.account_key}`,
+      provider: "codex" as const,
+      label: registry.email,
+      plan: typeof usage.plan_type === "string" ? usage.plan_type : (registry.plan ?? null),
+      email: registry.email,
+      windows: [toRegistryWindow(usage.primary), toRegistryWindow(usage.secondary)].filter(
+        (window): window is UsageWindow => window !== null,
+      ),
+      resets: null,
+      failure: null,
+    };
+  });
 }
 
 /** Parses codex-auth v0.2's fixed-column table. Unknown columns are ignored. */
@@ -101,7 +97,6 @@ export function parseCodexAuthTable(raw: string): Account[] {
       return [];
     }
 
-    const isCurrent = identity[1] === "*";
     const selector = identity[2];
     const email = identity[3];
     const plan = line.slice(planAt, fiveHourAt).trim() || null;
@@ -110,7 +105,7 @@ export function parseCodexAuthTable(raw: string): Account[] {
       parseUsageWindow(line.slice(weeklyAt, activityAt), "weekly", "Weekly Limit"),
     ].filter((window): window is UsageWindow => window !== null);
 
-    return [account(selector, email, plan, windows, isCurrent)];
+    return [account(selector, email, plan, windows)];
   });
 }
 
@@ -121,12 +116,6 @@ export function applyCodexAuthRegistry(accounts: Account[], value: unknown): Acc
 
   const registryAccounts = value.accounts.filter(isRegistryAccount);
   const used = new Set<string>();
-  const activeKey = typeof value.active_account_key === "string" ? value.active_account_key : null;
-  const emailCounts = new Map<string, number>();
-
-  for (const registry of registryAccounts) {
-    emailCounts.set(registry.email, (emailCounts.get(registry.email) ?? 0) + 1);
-  }
 
   return accounts.map((account) => {
     const registry = registryAccounts.find(
@@ -152,8 +141,6 @@ export function applyCodexAuthRegistry(accounts: Account[], value: unknown): Acc
       windows: [toRegistryWindow(usage.primary), toRegistryWindow(usage.secondary)].filter(
         (window): window is UsageWindow => window !== null,
       ),
-      isCurrent: registry.account_key === activeKey,
-      switchQuery: emailCounts.get(registry.email) === 1 ? registry.email : account.switchQuery,
     };
   });
 }
@@ -200,15 +187,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseJsonRecord(raw: string): Record<string, unknown> | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return isRecord(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
 type RegistryAccount = {
   account_key: string;
   email: string;
@@ -225,13 +203,7 @@ function isRegistryAccount(value: unknown): value is RegistryAccount {
   );
 }
 
-function account(
-  selector: string,
-  email: string,
-  plan: string | null,
-  windows: UsageWindow[],
-  isCurrent: boolean,
-): Account {
+function account(selector: string, email: string, plan: string | null, windows: UsageWindow[]): Account {
   return {
     id: `codex-auth:${selector}:${email}`,
     provider: "codex",
@@ -241,7 +213,5 @@ function account(
     windows,
     resets: null,
     failure: null,
-    isCurrent,
-    switchQuery: selector,
   };
 }

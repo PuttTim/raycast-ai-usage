@@ -22,13 +22,13 @@ export async function fetchCodexResetCredits(token: string, accountId: string | 
   });
 
   if (!response.ok) {
-    throw new Error(`Codex reset credits returned HTTP ${response.status}.`);
+    throw new Error(`ChatGPT reset credits returned HTTP ${response.status}.`);
   }
 
   const payload: unknown = await response.json();
 
   if (!isRecord(payload) || !Array.isArray(payload.credits)) {
-    throw new Error("Codex returned an invalid reset-credit response.");
+    throw new Error("ChatGPT returned an invalid reset-credit response.");
   }
 
   const credits = payload.credits.filter(isResetCredit);

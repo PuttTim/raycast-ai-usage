@@ -71,6 +71,9 @@ export async function fetchClaudeAccount(): Promise<Account> {
     failure: null,
   };
 
+  // Resolving the client spawns `claude --version`; start it now so it runs
+  // alongside the keychain read instead of after it.
+  const client = getUsageClient();
   let credentials = await readCredentials();
 
   if (!credentials) {
@@ -100,7 +103,7 @@ export async function fetchClaudeAccount(): Promise<Account> {
       throw new ClaudeAuthExpiredError();
     }
 
-    return { ...base, ...(await fetchUsage(credentials)) };
+    return { ...base, ...(await fetchUsage(credentials, client)) };
   } catch (error) {
     if (error instanceof ClaudeAuthExpiredError) {
       return { ...base, failure: { kind: "expired", message: error.message } };
@@ -458,9 +461,10 @@ const STANDARD_USAGE_CLIENT: ClaudeUsageClient = { url: USAGE_URL, userAgent: US
 
 async function fetchUsage(
   credentials: Credentials,
+  client: Promise<ClaudeUsageClient>,
 ): Promise<{ windows: UsageWindow[]; resets: ResetCreditsResponse | null }> {
   let token = credentials.accessToken;
-  let usage = await requestUsageWithFallback(token, await resolveUsageClient());
+  let usage = await requestUsageWithFallback(token, await client);
 
   if (usage.response.status === 401 && credentials.refreshToken) {
     let refreshed: Credentials | null;
@@ -512,6 +516,14 @@ async function requestUsageWithFallback(
   }
 
   return { client: STANDARD_USAGE_CLIENT, response: await requestUsage(token, STANDARD_USAGE_CLIENT) };
+}
+
+let usageClient: Promise<ClaudeUsageClient> | null = null;
+
+/** The installed Claude Code version does not change mid-session, so ask once. */
+function getUsageClient(): Promise<ClaudeUsageClient> {
+  usageClient ??= resolveUsageClient();
+  return usageClient;
 }
 
 async function resolveUsageClient(): Promise<ClaudeUsageClient> {
