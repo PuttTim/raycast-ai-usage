@@ -63,6 +63,14 @@ npm install
 npm run dev
 ```
 
+### Updating a local install
+
+```bash
+npm run update
+```
+
+Pulls the latest changes, runs `ray develop` until Raycast has imported the new build, runs `ray build`, then stops the dev server. If the dev build fails or takes longer than two minutes, it prints the log and stops. Run `npm install` first if the pull changed dependencies.
+
 ## License
 
 MIT
