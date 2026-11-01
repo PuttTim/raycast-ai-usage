@@ -46,6 +46,7 @@
   "scripts": {
     "build": "ray build",
     "dev": "ray develop",
+    "update": "bash scripts/update.sh",
     "fix-lint": "ray lint --fix",
     "lint": "ray lint",
     "test": "node --experimental-strip-types --test src/*.test.ts",
