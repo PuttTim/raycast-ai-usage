@@ -28,7 +28,7 @@ codex-auth login
 codex-auth list
 ```
 
-Every managed account appears automatically in Raycast. Use **Rename Account** to give an email a shorter display name.
+Every managed account appears automatically in Raycast. Use **Rename Account** to give an email a shorter display name. Use **Move up** and **Move Down** (⌘⌥↑ and ⌘⌥↓) to reorder the list; the order is remembered.
 
 ## Requirements
 

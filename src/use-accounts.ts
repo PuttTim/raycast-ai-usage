@@ -1,11 +1,14 @@
 import { Cache } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccountNames } from "./account-names";
+import { applyAccountOrder, moveAccount } from "./account-order";
 import { getConfiguredAccounts, type ConfiguredAccount } from "./usage";
 import type { Account, AccountFailure } from "./providers/types";
 
 const cache = new Cache();
 const CACHE_KEY = "accounts";
+/** Kept in the synchronous cache, unlike names, so the first frame is already in order. */
+const ORDER_KEY = "account-order";
 
 /** A cached response, when we last asked, and when its usage last actually moved. */
 type CacheEntry = {
@@ -43,12 +46,14 @@ export type AccountState = {
 export function useAccounts() {
   const configs = useMemo(getConfiguredAccounts, []);
   const { names, rename } = useAccountNames();
+  const [order, setOrder] = useState<string[]>(readOrder);
+  const orderedConfigs = useMemo(() => applyAccountOrder(configs, order), [configs, order]);
   // Read once, on the first render: the selection has to be right immediately,
   // because moving it later is what makes the list jump under the cursor.
   const [initial] = useState(() => {
     const entries = readCache(configs);
 
-    return { entries, selectedId: getMostRecentlyUsed(entries) ?? configs[0]?.id };
+    return { entries, selectedId: getMostRecentlyUsed(entries) ?? orderedConfigs[0]?.id };
   });
   const [entries, setEntries] = useState<Map<string, CacheEntry>>(initial.entries);
   const [refreshErrors, setRefreshErrors] = useState<Map<string, AccountFailure>>(new Map());
@@ -123,7 +128,7 @@ export function useAccounts() {
     }
   }, [pending, entries]);
 
-  const states: AccountState[] = configs.map((config) => {
+  const states: AccountState[] = orderedConfigs.map((config) => {
     const entry = entries.get(config.id);
     const failure = refreshErrors.get(config.id) ?? null;
     const name = names[config.id];
@@ -149,6 +154,19 @@ export function useAccounts() {
     refresh: useCallback(() => setRefreshRequest((generation) => generation + 1), []),
     /** Stores a display name for an account; an empty name restores the configured one. */
     rename,
+    /** Moves an account one place up (-1) or down (+1) in the list and remembers it. */
+    move: useCallback(
+      (id: string, offset: -1 | 1) => {
+        const next = moveAccount(
+          orderedConfigs.map((config) => config.id),
+          id,
+          offset,
+        );
+        cache.set(ORDER_KEY, JSON.stringify(next));
+        setOrder(next);
+      },
+      [orderedConfigs],
+    ),
   };
 }
 
@@ -188,6 +206,15 @@ function failedAccount(config: ConfiguredAccount, error: unknown): Account {
     resets: null,
     failure: { kind: "error", message: error instanceof Error ? error.message : String(error) },
   };
+}
+
+function readOrder(): string[] {
+  try {
+    const value: unknown = JSON.parse(cache.get(ORDER_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 function readCache(configs: ConfiguredAccount[]): Map<string, CacheEntry> {

@@ -9,7 +9,7 @@ import { getPace, type Pace } from "./pace";
 import type { Account, AccountFailure, ResetCredit, ResetCreditsResponse, UsageWindow } from "./providers/types";
 
 export default function Command() {
-  const { states, isLoading, refresh, rename, initialSelectedId } = useAccounts();
+  const { states, isLoading, refresh, rename, move, initialSelectedId } = useAccounts();
   // Controlled from the first render onwards, so nothing re-selects a row as
   // the accounts stream in one by one.
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSelectedId);
@@ -37,8 +37,15 @@ export default function Command() {
           }
         />
       ) : null}
-      {states.map((state) => (
-        <AccountItem key={state.config.id} state={state} refreshAction={refreshAction} onRename={rename} />
+      {states.map((state, index) => (
+        <AccountItem
+          key={state.config.id}
+          state={state}
+          refreshAction={refreshAction}
+          onRename={rename}
+          onMoveUp={index > 0 ? () => move(state.config.id, -1) : undefined}
+          onMoveDown={index < states.length - 1 ? () => move(state.config.id, 1) : undefined}
+        />
       ))}
     </List>
   );
@@ -48,10 +55,16 @@ function AccountItem({
   state,
   refreshAction,
   onRename,
+  onMoveUp,
+  onMoveDown,
 }: {
   state: AccountState;
   refreshAction: ReactElement;
   onRename: RenameHandler;
+  /** Absent when the account is already first, so the action is hidden. */
+  onMoveUp?: () => void;
+  /** Absent when the account is already last. */
+  onMoveDown?: () => void;
 }) {
   const { config, account, isStale } = state;
   const branding = getBranding(config.provider);
@@ -81,6 +94,22 @@ function AccountItem({
             shortcut={{ modifiers: ["cmd"], key: "e" }}
             target={<RenameForm state={state} onRename={onRename} />}
           />
+          {onMoveUp ? (
+            <Action
+              title="Move up"
+              icon={Icon.ArrowUp}
+              shortcut={{ modifiers: ["cmd", "opt"], key: "arrowUp" }}
+              onAction={onMoveUp}
+            />
+          ) : null}
+          {onMoveDown ? (
+            <Action
+              title="Move Down"
+              icon={Icon.ArrowDown}
+              shortcut={{ modifiers: ["cmd", "opt"], key: "arrowDown" }}
+              onAction={onMoveDown}
+            />
+          ) : null}
           {account?.email ? (
             <Action.CopyToClipboard title="Copy Account Email" content={account.email} icon={Icon.Envelope} />
           ) : null}
