@@ -22,6 +22,15 @@
   ],
   "preferences": [
     {
+      "name": "showUsageUsed",
+      "title": "Usage Display",
+      "label": "Show usage used",
+      "description": "Show the percentage used instead of the percentage left for all accounts and usage windows",
+      "type": "checkbox",
+      "required": false,
+      "default": false
+    },
+    {
       "name": "showCodex",
       "title": "ChatGPT",
       "label": "Show ChatGPT limits",

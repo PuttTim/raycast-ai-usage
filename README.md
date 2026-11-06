@@ -11,6 +11,8 @@ For each account, one section listing its main rate-limit windows:
 
 Every window shows how much you have left, coloured by how close you are to the limit. Its reset time appears when the provider reports a machine-readable timestamp.
 
+Enable **Show usage used** in the extension preferences to show the percentage used instead, in both the account list and every usage window. Colours still indicate how close you are to the limit.
+
 ## Multiple ChatGPT accounts
 
 ChatGPT account discovery requires [codex-auth](https://github.com/loongphy/codex-auth). Install it globally with npm or Bun:

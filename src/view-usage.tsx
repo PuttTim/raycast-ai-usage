@@ -1,4 +1,14 @@
-import { Action, ActionPanel, Color, Form, Icon, List, openExtensionPreferences, useNavigation } from "@raycast/api";
+import {
+  Action,
+  ActionPanel,
+  Color,
+  Form,
+  Icon,
+  List,
+  getPreferenceValues,
+  openExtensionPreferences,
+  useNavigation,
+} from "@raycast/api";
 import { Fragment, useState, type ReactElement } from "react";
 import { getProgressIcon } from "@raycast/utils";
 import { useAccounts, type AccountState } from "./use-accounts";
@@ -9,6 +19,7 @@ import { getPace, type Pace } from "./pace";
 import type { Account, AccountFailure, ResetCredit, ResetCreditsResponse, UsageWindow } from "./providers/types";
 
 export default function Command() {
+  const { showUsageUsed } = getPreferenceValues<{ showUsageUsed: boolean }>();
   const { states, isLoading, refresh, rename, move, initialSelectedId } = useAccounts();
   // Controlled from the first render onwards, so nothing re-selects a row as
   // the accounts stream in one by one.
@@ -41,6 +52,7 @@ export default function Command() {
         <AccountItem
           key={state.config.id}
           state={state}
+          showUsageUsed={showUsageUsed}
           refreshAction={refreshAction}
           onRename={rename}
           onMoveUp={index > 0 ? () => move(state.config.id, -1) : undefined}
@@ -53,12 +65,14 @@ export default function Command() {
 
 function AccountItem({
   state,
+  showUsageUsed,
   refreshAction,
   onRename,
   onMoveUp,
   onMoveDown,
 }: {
   state: AccountState;
+  showUsageUsed: boolean;
   refreshAction: ReactElement;
   onRename: RenameHandler;
   /** Absent when the account is already first, so the action is hidden. */
@@ -76,8 +90,15 @@ function AccountItem({
       icon={{ source: branding.icon, tintColor: getBrandTint(account) ?? branding.iconTint }}
       title={config.label}
       keywords={[branding.name, account?.email ?? "", formatPlan(account?.plan ?? null) ?? ""]}
-      accessories={getAccessories(account, isStale, state.refreshError)}
-      detail={<AccountDetail state={state} resets={resets} resetCount={account?.resets?.available_count ?? null} />}
+      accessories={getAccessories(account, isStale, state.refreshError, showUsageUsed)}
+      detail={
+        <AccountDetail
+          state={state}
+          resets={resets}
+          resetCount={account?.resets?.available_count ?? null}
+          showUsageUsed={showUsageUsed}
+        />
+      }
       actions={
         <ActionPanel>
           {account?.id === "codex-auth:unavailable" ? (
@@ -168,6 +189,7 @@ function getAccessories(
   account: Account | null,
   isStale: boolean,
   refreshError: AccountFailure | null,
+  showUsageUsed: boolean,
 ): List.Item.Accessory[] {
   if (account === null) {
     return [{ tag: { value: "…", color: Color.SecondaryText } }];
@@ -190,10 +212,11 @@ function getAccessories(
 
   if (glanceWindow) {
     const remaining = getRemaining(glanceWindow);
+    const percent = showUsageUsed ? clampPercent(glanceWindow.usedPercent) : remaining;
     accessories.push({
-      icon: getProgressIcon(remaining / 100, getRemainingColor(remaining)),
-      text: `${formatPercent(remaining)}%`,
-      tooltip: `${glanceWindow.label}: ${formatPercent(remaining)}% left`,
+      icon: getProgressIcon(percent / 100, getRemainingColor(remaining)),
+      text: `${formatPercent(percent)}%`,
+      tooltip: `${glanceWindow.label}: ${formatPercent(percent)}% ${showUsageUsed ? "used" : "left"}`,
     });
   }
 
@@ -223,13 +246,15 @@ function AccountDetail({
   state,
   resets,
   resetCount,
+  showUsageUsed,
 }: {
   state: AccountState;
   resets: ResetCredit[];
   resetCount: number | null;
+  showUsageUsed: boolean;
 }) {
   const sections = [
-    ...buildWindowSections(state),
+    ...buildWindowSections(state, showUsageUsed),
     buildAccountRows(state),
     buildResetRows(resets, resetCount),
     buildMetaRows(state),
@@ -251,11 +276,11 @@ function AccountDetail({
 }
 
 /**
- * One block per window: how much is left, and when it comes back. While an
+ * One block per window: usage in the preferred display mode, and when it resets. While an
  * account is still loading we list the windows this provider usually returns,
  * so the pane keeps its shape instead of jumping when the real response lands.
  */
-function buildWindowSections({ config, account }: AccountState): ReactElement[][] {
+function buildWindowSections({ config, account }: AccountState, showUsageUsed: boolean): ReactElement[][] {
   if (account === null) {
     return getBranding(config.provider).skeletonWindows.map((label) => [
       <List.Item.Detail.Metadata.Label
@@ -279,17 +304,18 @@ function buildWindowSections({ config, account }: AccountState): ReactElement[][
     ];
   }
 
-  // Two lines per window: what is left and its pace as pills, then a plain
+  // Two lines per window: usage and its pace as pills, then a plain
   // line for when it comes back.
   return account.windows.map((window) => {
     const remaining = getRemaining(window);
+    const percent = showUsageUsed ? clampPercent(window.usedPercent) : remaining;
     const resetsAt = window.resetsAt;
     const pace = getPace(window);
     const rows = [
       <List.Item.Detail.Metadata.TagList key={window.id} title={window.label}>
         <List.Item.Detail.Metadata.TagList.Item
-          text={`${formatPercent(remaining)}% left`}
-          icon={getProgressIcon(remaining / 100, getRemainingColor(remaining))}
+          text={`${formatPercent(percent)}% ${showUsageUsed ? "used" : "left"}`}
+          icon={getProgressIcon(percent / 100, getRemainingColor(remaining))}
           color={getRemainingColor(remaining)}
         />
         {pace ? (
